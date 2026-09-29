@@ -1,0 +1,18 @@
+# Solo lint: el formato del codigo no se toca (no usar `ruff format`).
+line-length = 140
+target-version = "py312"
+
+[lint]
+# E/W: pycodestyle, F: pyflakes, I: orden de imports, B: bugbear (errores comunes), UP: sintaxis
+# de la version de Python del proyecto.
+select = ["E", "W", "F", "I", "B", "UP"]
+# B905: zip() sin strict= -- en este codigo los zip recorren listas de igual largo por construccion
+# (iconos de la leyenda y sus puntos ya validados), agregarlo en todos lados seria ruido.
+ignore = ["B905"]
+
+[lint.per-file-ignores]
+# Los scripts agregan src/ al sys.path antes de importar el paquete.
+"scripts/*" = ["E402"]
+
+[lint.isort]
+known-first-party = ["icon_solver"]

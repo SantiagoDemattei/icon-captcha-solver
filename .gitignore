@@ -1,0 +1,18 @@
+# Contexto para agentes, no para humanos leyendo el repo
+CLAUDE.md
+*.agent.md
+docs/agents/
+
+.venv/
+__pycache__/
+*.pyc
+
+# Dataset (imágenes descargadas + labels del oráculo) y checkpoints del modelo:
+# grandes y no aportan al repo público, se comparten aparte si hace falta.
+data/
+models/
+*.pt
+*.onnx
+*.pth
+
+.env

@@ -1,0 +1,12 @@
+curl_cffi
+numpy
+opencv-python
+Pillow
+playwright
+PyJWT
+python-dotenv
+tqdm
+
+# torch no esta listado aca: la wheel correcta depende del hardware.
+# CPU:  pip install torch
+# CUDA: pip install torch --index-url https://download.pytorch.org/whl/cu126

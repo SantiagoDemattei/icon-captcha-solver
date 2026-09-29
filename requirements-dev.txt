@@ -1,0 +1,6 @@
+-r requirements.txt
+pytest
+ruff
+mypy
+# Solo para regenerar las figuras del README (docs/make_figures.py).
+matplotlib
