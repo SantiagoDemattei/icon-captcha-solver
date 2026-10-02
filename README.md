@@ -1,193 +1,195 @@
-# visual-captcha-solver
+English | [Español](README.es.md)
 
-Un modelo chico, entrenado desde cero, que resuelve el captcha visual de íconos de **BotDeflector**: el paso visual que usa Queue-it (y sitios detrás de `dual.challenge.queue-it.net` / `botdeflector.eu`) para separar humanos de bots. El objetivo es mostrar con números que este diseño de captcha no es la barrera que parece.
+# icon-captcha-solver
 
-El entregable es el modelo y este writeup, no una herramienta de scraping.
+A small model, trained from scratch, that solves **BotDeflector**'s visual icon captcha: the visual step Queue-it (and sites behind `dual.challenge.queue-it.net` / `botdeflector.eu`) uses to tell humans from bots. The goal is to show, with numbers, that this captcha design is not the barrier it appears to be.
+
+The deliverable is the model and this writeup, not a scraping tool.
 
 | | |
 |---|---|
-| Challenges resueltos (validación offline, todo o nada) | **93.7%** (59 de 63) |
-| Íconos acertados | **97.9%** (185 de 189) |
-| Prueba en vivo contra el sitio real, en un browser | **20 de 20** verificados |
-| Tiempo por challenge (CPU) | ~0.26 s |
-| Tamaño del clasificador | ~25 mil parámetros |
+| Challenges solved (offline validation, all-or-nothing) | **93.7%** (59 of 63) |
+| Icons correct | **97.9%** (185 of 189) |
+| Live test against the real site, in a browser | **20 of 20** verified |
+| Time per challenge (CPU) | ~0.26 s |
+| Classifier size | ~25K parameters |
 
-<p align="center"><img src="docs/img/challenge.png" width="460" alt="Un challenge real: la leyenda pide tres íconos y el fondo los esconde rotados y escalados entre formas señuelo"></p>
+<p align="center"><img src="docs/img/challenge.png" width="460" alt="A real challenge: the legend asks for three icons and the background hides them, rotated and scaled, among decoy shapes"></p>
 
-## El captcha
+## The captcha
 
-Cada challenge son dos imágenes:
+Each challenge consists of two images:
 
-- **Leyenda**: 2 o 3 íconos en fila, sin deformar. Se leen de izquierda a derecha, que es también el orden en que hay que clickearlos.
-- **Fondo** (300×200): los mismos íconos, **rotados y escalados de forma uniforme** (nunca estirados ni deformados), rellenos de un color arbitrario, mezclados con formas geométricas, líneas señuelo y **otros íconos de la misma librería** que no son los pedidos.
+- **Legend**: 2 or 3 icons in a row, undistorted. They are read left to right, which is also the order in which they must be clicked.
+- **Background** (300×200): the same icons, **rotated and uniformly scaled** (never stretched or warped), filled with an arbitrary color, mixed in with geometric shapes, decoy lines and **other icons from the same library** that were not asked for.
 
-La respuesta es un punto por ícono, en orden. El servidor la acepta si cada punto cae cerca del centro del ícono correcto.
+The answer is one point per icon, in order. The server accepts it if each point lands near the center of the correct icon.
 
-Dos propiedades del servidor definen el problema, y ambas se confirmaron en vivo:
+Two properties of the server define the problem, and both were confirmed live:
 
-- **Cada challenge es de un solo uso y todo o nada.** Un intento equivocado consume el challenge sin decir qué punto falló: acertar 2 de 3 da el mismo error opaco que no acertar ninguno. No hay forma de usar el verificador como oráculo para probar combinaciones.
-- **No alcanza con visión clásica.** Comparar el contorno limpio de la leyenda contra las formas del fondo con momentos de Hu (`cv2.matchShapes`), con asignación óptima, deja la respuesta correcta en el puesto 56, 163 o 37.356 del ranking según el challenge. Un señuelo casi siempre se parece más.
+- **Each challenge is single-use and all-or-nothing.** A wrong attempt consumes the challenge without saying which point failed: getting 2 of 3 right returns the same opaque error as getting none right. There is no way to use the verifier as an oracle to test combinations.
+- **Classical computer vision is not enough.** Comparing the clean legend contour against the background shapes with Hu moments (`cv2.matchShapes`), with optimal assignment and also with added size and aspect-ratio priors, puts the correct answer at rank 56, 163 or 37,356 depending on the challenge. A decoy almost always looks more similar.
 
-## Cómo funciona
+## How it works
 
-<p align="center"><img src="docs/img/pipeline.png" alt="Pipeline sobre un challenge de validación: fondo, regiones candidatas, mejores candidatos por ícono y clicks finales"></p>
+<p align="center"><img src="docs/img/pipeline.png" alt="Pipeline on a validation challenge: background, candidate regions, top candidates per icon and final clicks"></p>
 
-1. **Candidatos.** El fondo se segmenta con un relleno de rango fijo (flood fill) sembrado en una grilla. El umbral se mide contra el color de la semilla, no contra el vecino: así el relleno no se escapa por gradientes suaves hacia formas de color parecido. Salen unas 460 regiones por fondo, y en el 99.5% de los íconos pedidos alguna de ellas es la correcta.
-2. **Codificación.** Cada región pasa a una máscara de forma de 48×48 (sin estirar: se completa a cuadrado antes de reducir) y de ahí a **coordenadas polares** centradas en su centroide. El color no se usa: es aleatorio y no aporta información.
-3. **Clasificación.** Una CNN chica asigna cada región a uno de los **20 íconos** de la librería o a una clase **fondo**. La librería resultó chica y estable, así que es un problema de clasificación de conjunto cerrado, no de comparar embeddings.
-4. **Silueta de la leyenda.** Como segunda señal, que no depende de lo aprendido, cada región se compara contra la silueta exacta del ícono pedido, sacada de la propia leyenda: un IoU suave maximizado sobre todas las rotaciones, calculado de una vez con una FFT del eje angular.
-5. **Asignación.** El puntaje es `log p(clase) + log(similitud)`. La asignación uno a uno que maximiza el puntaje conjunto se busca por fuerza bruta entre los 8 mejores candidatos de cada ícono, descartando dos candidatos que en realidad son el mismo ícono.
-6. **Click.** El centroide de la región, aunque caiga fuera del trazo (el teléfono, Leo): es lo que el servidor valida y lo que hace un humano.
+1. **Candidates.** The background is segmented with a fixed-range flood fill seeded on a grid. The threshold is measured against the seed color, not the neighboring pixel, so the fill does not leak through smooth gradients into similarly colored shapes. This yields about 460 regions per background, and for 99.5% of the requested icons one of them is the correct one.
+2. **Encoding.** Each region becomes a 48×48 shape mask (without stretching: it is padded to a square before downscaling) and then goes to **polar coordinates** centered on its centroid. Color is not used: it is random and carries no information.
+3. **Classification.** A small CNN assigns each region to one of the library's **20 icons** or to a **background** class. The library turned out to be small and stable, so this is a closed-set classification problem, not an embedding comparison one.
+4. **Legend silhouette.** As a second signal, independent of anything learned, each region is compared against the exact silhouette of the requested icon, taken from the legend itself: a soft IoU maximized over all rotations, computed in one pass with an FFT over the angular axis.
+5. **Assignment.** The score is `log p(class) + log(similarity)`. The one-to-one assignment that maximizes the joint score is found by brute force among the top 8 candidates for each icon, discarding pairs of candidates that are actually the same icon.
+6. **Click.** The region's centroid, even when it falls outside the stroke (the phone, Leo): that is what the server validates and what a human does.
 
-### La idea clave: rotación en coordenadas polares
+### The key idea: rotation in polar coordinates
 
-<p align="center"><img src="docs/img/polar.png" width="640" alt="Una región rotada 0, 90, 180 y 270 grados y su codificación polar: la rotación se convierte en un desplazamiento circular"></p>
+<p align="center"><img src="docs/img/polar.png" width="640" alt="A region rotated 0, 90, 180 and 270 degrees and its polar encoding: rotation becomes a circular shift"></p>
 
-Los íconos del fondo aparecen en cualquier ángulo. En coordenadas polares, rotar una forma es **desplazar la imagen de forma circular en el eje del ángulo**. La red usa padding circular en ese eje y pooling global al final, así que es invariante a la rotación por construcción y no tiene que aprenderlo de los ejemplos. Con pocos cientos de challenges etiquetados, eso marcó la diferencia: pasar de la representación cartesiana a la polar subió la precisión del clasificador de 31.6% a 39.7% con la segmentación de ese momento.
+Icons in the background appear at any angle. In polar coordinates, rotating a shape is **a circular shift of the image along the angle axis**. The network uses circular padding on that axis and global pooling at the end, so it is rotation-invariant by construction and does not have to learn it from examples. With only a few hundred labeled challenges, that made the difference: switching from the Cartesian to the polar representation raised classifier accuracy from 31.6% to 39.7% with the segmentation of the time.
 
-<p align="center"><img src="docs/img/classifier_view.png" width="400" alt="Para cada ícono pedido: la forma de la leyenda, la región elegida en el fondo y la entrada polar que recibe el clasificador"></p>
+<p align="center"><img src="docs/img/classifier_view.png" width="400" alt="For each requested icon: the legend shape, the region chosen in the background and the polar input the classifier receives"></p>
 
-## Arquitectura
+## Architecture
 
 ```mermaid
 flowchart LR
-    L["Leyenda"] --> LI["Íconos de la leyenda<br/>segmentation.legend_icons"]
-    LI --> CL["Clase de cada ícono<br/>por prototipo más cercano"]
-    LI --> SL["Silueta de la leyenda"]
-    B["Fondo"] --> CA["Candidatos por relleno<br/>segmentation.background_candidates"]
-    CA --> EN["Codificación polar<br/>shapes.encode_regions"]
-    EN --> NN["Clasificador<br/>model.IconModel"]
-    CA --> SR["Silueta de cada región"]
-    NN --> SC["Puntaje por candidato e ícono"]
+    L["Legend"] --> LI["Legend icons<br/>segmentation.legend_icons"]
+    LI --> CL["Class of each icon<br/>by nearest prototype"]
+    LI --> SL["Legend silhouette"]
+    B["Background"] --> CA["Flood-fill candidates<br/>segmentation.background_candidates"]
+    CA --> EN["Polar encoding<br/>shapes.encode_regions"]
+    EN --> NN["Classifier<br/>model.IconModel"]
+    CA --> SR["Silhouette of each region"]
+    NN --> SC["Score per candidate and icon"]
     CL --> SC
-    SL --> SIM["Similitud por rotación (FFT)"]
+    SL --> SIM["Similarity over rotations (FFT)"]
     SR --> SIM
     SIM --> SC
-    SC --> AS["Asignación uno a uno"]
-    AS --> CK["Clicks = centroides"]
+    SC --> AS["One-to-one assignment"]
+    AS --> CK["Clicks = centroids"]
 ```
 
-El invariante que ordena el diseño: **el entrenamiento y la inferencia ven el mismo dominio.** La región verdadera bajo un click humano (entrenamiento) y los candidatos del fondo (inferencia) salen del mismo relleno con la misma configuración, y toda forma llega al modelo por la misma codificación. Si la segmentación de entrenamiento y la de inferencia difieren, la precisión offline deja de predecir lo que pasa al resolver.
+The invariant that drives the design: **training and inference see the same domain.** The true region under a human click (training) and the background candidates (inference) come from the same flood fill with the same configuration, and every shape reaches the model through the same encoding. If training and inference segmentation differ, offline accuracy stops predicting what happens when solving.
 
-### Datos y etiquetado
+### Data and labeling
 
 ```mermaid
 flowchart LR
-    H["Humano resuelve en un browser real<br/>collect_human_labels.py"] -->|verificado| RAW[("data/raw")]
-    BS["El modelo resuelve en vivo<br/>browser_solve.py"] -->|verificado| RAW
-    BS -->|rechazado| LB[("data/live_browser")]
-    RAW --> BD["build_dataset.py"] --> PR[("data/processed<br/>crops, negativos, prototipos")]
+    H["Human solves in a real browser<br/>collect_human_labels.py"] -->|verified| RAW[("data/raw")]
+    BS["Model solves live<br/>browser_solve.py"] -->|verified| RAW
+    BS -->|rejected| LB[("data/live_browser")]
+    RAW --> BD["build_dataset.py"] --> PR[("data/processed<br/>crops, negatives, prototypes")]
     PR --> TR["train.py"] --> IM["models/icon_model.pt"]
     IM --> BS
-    IM --> EV["evaluate_solver.py<br/>solo challenges humanos"]
+    IM --> EV["evaluate_solver.py<br/>human challenges only"]
 ```
 
-Como el verificador es de un solo uso, las etiquetas no se pueden generar probando. Se cosechan de resoluciones que el servidor aceptó:
+Since the verifier is single-use, labels cannot be generated by trial and error. They are harvested from solutions the server accepted:
 
-- **Humanas**: un Chromium visible registra los clicks del `/icon/verify` aceptado y las imágenes de ese mismo challenge.
-- **Del modelo**: una vez entrenado, el modelo resuelve challenges en vivo y guarda los que el servidor verifica. Esos van **siempre a entrenamiento**: solo existen porque el modelo acertó, y en validación la llenarían de casos fáciles.
+- **Human**: a visible Chromium records the clicks from the accepted `/icon/verify` and the images of that same challenge.
+- **Model**: once trained, the model solves challenges live and keeps the ones the server verifies. These **always go to training**: they only exist because the model got them right, and in validation they would fill it with easy cases.
 
-Además de los crops de íconos, cada challenge etiquetado aporta **negativos gratis**. Toda región que no toca un ícono marcado es, con seguridad, ninguno de los pedidos. El modelo aprende de ellos con una pérdida que solo afirma eso, `-log(1 - Σ p(pedidas))`, sin inventar a qué clase pertenecen.
+Besides the icon crops, each labeled challenge provides **free negatives**. Any region that does not touch a marked icon is, with certainty, none of the requested ones. The model learns from them with a loss that asserts only that, `-log(1 - Σ p(requested))`, without making up which class they belong to.
 
-Dataset actual: 327 challenges (304 etiquetados por humanos y 23 por el modelo), 979 crops de íconos y 9.810 negativos. La validación son 63 challenges humanos, elegidos por hash del id.
+Current dataset: 327 challenges (304 labeled by humans and 23 by the model), 979 icon crops and 9,810 negatives. Validation is 63 human challenges, selected by a hash of the id.
 
-## Resultados
+## Results
 
-La métrica que decide es la tasa de challenges resueltos de punta a punta sobre la validación, todo o nada, como `/icon/verify`. Un punto cuenta como acierto si cae a 8 px o menos del click humano aceptado o del centro de la región verdadera; es una estimación conservadora a partir de los clicks humanos que el servidor aceptó.
+The deciding metric is the end-to-end solve rate over validation, all-or-nothing, like `/icon/verify`. A point counts as a hit if it lands within 8 px of the accepted human click or of the center of the true region; this is a conservative estimate based on the human clicks the server accepted.
 
-| Paso | Resueltos |
+| Step | Solved |
 |---|---|
-| Primer solver completo: candidatos por relleno, clasificador y negativos | 47.0% |
-| Leyenda del candado bien separada; se guarda el último epoch | 59.6% |
-| Silueta de la leyenda como segunda señal | 74.3% |
-| Click siempre en el centroide (y criterio de acierto estricto) | 85.8% |
-| Librería real de 20 íconos (antes eran 15 clases mezcladas) | 90.7% |
-| **Modelo desplegado** | **93.7%** |
+| First complete solver: flood-fill candidates, classifier and negatives | 47.0% |
+| Padlock legend split correctly; last epoch is kept | 59.6% |
+| Legend silhouette as a second signal | 74.3% |
+| Click always on the centroid (and strict hit criterion) | 85.8% |
+| Real 20-icon library (previously 15 mixed classes) | 90.7% |
+| **Deployed model** | **93.7%** |
 
-Salvo el modelo desplegado, cada fila es la media de al menos 3 corridas: con unos 60 challenges de validación, el ruido entre corridas es de ±3 a 5 puntos. Desde el cuarto paso el criterio de acierto es más estricto que en los anteriores. Reentrenar con el código actual da 90.2% de media (88.5 a 91.8%). En vivo, el modelo resolvió 20 challenges seguidos contra el sitio real, en dos sesiones.
+Except for the deployed model, which was the best of its 3 original runs, each row is the mean of at least 3 runs: with about 60 validation challenges, run-to-run noise is ±3 to 5 points. From the fourth step on, the hit criterion is stricter than in the earlier ones. Retraining with the current code gives a 90.2% mean (88.5 to 91.8%). Live, the model solved 20 challenges in a row against the real site, over two sessions.
 
-Lo que se probó y no funcionó, con sus números, está en [`docs/research.md`](docs/research.md): crops sintéticos (cuatro variantes, todas peores), balanceo de clases, promediar rotaciones al inferir, segmentación por color cuantizado y filtrar crops por parecido con la leyenda.
+What was tried and did not work, with its numbers, is in [`docs/research.md`](docs/research.md): synthetic crops (four variants, all worse), class balancing, averaging over rotations at inference, color-quantized segmentation and filtering crops by similarity to the legend.
 
-## Uso
+## Usage
 
-### Instalación
+### Installation
 
 ```bash
 python -m venv .venv
 .venv\Scripts\activate          # Windows
 source .venv/bin/activate       # Linux / macOS
 pip install -r requirements-dev.txt
-pip install torch               # o, con GPU: pip install torch --index-url https://download.pytorch.org/whl/cu126
-playwright install chromium     # solo para los scripts que usan el browser
+pip install torch               # or, with a GPU: pip install torch --index-url https://download.pytorch.org/whl/cu126
+playwright install chromium     # only for the scripts that use the browser
 ```
 
-`requirements.txt` tiene las dependencias de ejecución; `requirements-dev.txt` suma pytest, ruff, mypy y matplotlib (para las figuras). `torch` se instala aparte porque la wheel correcta depende del hardware.
+`requirements.txt` has the runtime dependencies; `requirements-dev.txt` adds pytest, ruff, mypy and matplotlib (for the figures). `torch` is installed separately because the right wheel depends on the hardware.
 
-El dataset (`data/`) y el modelo entrenado (`models/`) no se versionan. Los scripts de abajo los generan.
+The dataset (`data/`) and the trained model (`models/`) are not version-controlled. The scripts below generate them.
 
-### Resolver un challenge
+### Solving a challenge
 
 ```python
 from icon_solver.solver import solve_icon
 
 points = solve_icon(background_bytes, legend_bytes)
-# [{"x": 214, "y": 32}, {"x": 49, "y": 103}, {"x": 245, "y": 75}], en el orden de la leyenda
+# [{"x": 214, "y": 32}, {"x": 49, "y": 103}, {"x": 245, "y": 75}], in legend order
 ```
 
-Necesita `src/` en el `sys.path` y `models/icon_model.pt`. La firma es la del proyecto que lo consume, para poder reemplazarlo cambiando un solo archivo.
+It needs `src/` on `sys.path` and `models/icon_model.pt`. The signature matches the project that consumes it, so it can be swapped in by changing a single file.
 
 ### Scripts
 
-| Script | Para qué |
+| Script | Purpose |
 |---|---|
-| `collect_human_labels.py --count N` | Abre un browser; cada challenge que resolvés y el servidor acepta queda etiquetado en `data/raw/`. |
-| `browser_solve.py --count N` | El modelo resuelve challenges en vivo. Los verificados van a `data/raw/` como etiquetados por el modelo, los rechazados a `data/live_browser/`, y cada intento queda en `attempts.jsonl`. |
-| `collect_dataset.py --count N` | Etiquetador automático por HTTP con el ranking de Hu-moments. Se conserva como referencia: su rendimiento medido es 0 de 5. |
-| `build_dataset.py` | `data/raw/` → `data/processed/`: crops, negativos, prototipos de leyenda y manifest. |
-| `train.py [--out ruta] [--seed N]` | Entrena y guarda el modelo (por defecto en `models/icon_model.pt`). Unos 4 minutos en una GPU de escritorio. |
-| `evaluate_solver.py` | La métrica principal: resueltos, íconos y recall de candidatos sobre la validación. |
-| `evaluate.py` | Diagnóstico del clasificador: precisión y matriz de confusión. |
-| `audit_crops.py` | Compara cada crop con la silueta de su ícono para encontrar fallas de segmentación. |
+| `collect_human_labels.py --count N` | Opens a browser; every challenge you solve that the server accepts is saved, labeled, to `data/raw/`. |
+| `browser_solve.py --count N` | The model solves challenges live. Verified ones go to `data/raw/` as model-labeled, rejected ones to `data/live_browser/`, and every attempt is logged in `attempts.jsonl`. |
+| `collect_dataset.py --count N` | Automatic HTTP labeler using the Hu-moments ranking. Kept for reference: its measured yield is 0 of 5. |
+| `build_dataset.py` | `data/raw/` → `data/processed/`: crops, negatives, legend prototypes and manifest. |
+| `train.py [--out path] [--seed N]` | Trains and saves the model (by default to `models/icon_model.pt`). About 4 minutes on a desktop GPU. |
+| `evaluate_solver.py` | The main metric: solved challenges, icons and candidate recall over validation. |
+| `evaluate.py` | Classifier diagnostics: accuracy and confusion matrix. |
+| `audit_crops.py` | Compares each crop with its icon's silhouette to find segmentation failures. |
 
-Todos corren desde la raíz del repo (`python scripts/<script>.py`) y aceptan `--help`. Las figuras de este README se regeneran con `python docs/make_figures.py`.
+All of them run from the repo root (`python scripts/<script>.py`) and accept `--help`. The figures in this README are regenerated with `python docs/make_figures.py`.
 
 ### Tests
 
 ```bash
-pytest                      # todo, ~3 minutos en CPU
-pytest -m "not slow"        # sin el build completo ni las métricas de punta a punta
+pytest                      # everything, ~3 minutes on CPU
+pytest -m "not slow"        # without the full build or the end-to-end metrics
 ruff check src scripts tests
 mypy
 ```
 
-`tests/unit/` corre siempre. `tests/characterization/` compara el pipeline completo contra una referencia capturada (clicks de cada challenge, candidatos, codificación, build del dataset y métricas), y se saltea si no hay datos locales.
+`tests/unit/` always runs. `tests/characterization/` compares the full pipeline against a captured reference (clicks for each challenge, candidates, encoding, dataset build and metrics), and is skipped if the local data or the trained model are missing.
 
-## Estructura
+## Project structure
 
 ```
 src/icon_solver/
-  segmentation.py   regiones del fondo y de la leyenda (una sola configuración)
-  shapes.py         codificación de forma: crop, polar, siluetas y su similitud
-  legend.py         prototipos de leyenda y clase de cada ícono
-  model.py          clasificador polar y el artefacto IconModel
-  solver.py         solver, traza de cada resolución y solve_icon
-  evaluation.py     métricas del solver y del clasificador
-  training.py       entrenamiento
-  challenges.py     tipo Challenge, almacén en disco y regla de validación
-  paths.py          rutas del proyecto
-  dataset/          build del dataset, dataset de PyTorch, auditoría
-  collection/       protocolo HTTP, proof-of-work, sesión de browser, etiquetador legacy
-scripts/            un envoltorio fino por tarea
-tests/              unitarios y de caracterización
-docs/               registro de investigación, ADRs y figuras
+  segmentation.py   background and legend regions (a single configuration)
+  shapes.py         shape encoding: crop, polar, silhouettes and their similarity
+  legend.py         legend prototypes and the class of each icon
+  model.py          polar classifier and the IconModel artifact
+  solver.py         solver, trace of each solve and solve_icon
+  evaluation.py     solver and classifier metrics
+  training.py       training
+  challenges.py     Challenge type, on-disk store and validation rule
+  paths.py          project paths
+  dataset/          dataset build, PyTorch dataset, audit
+  collection/       HTTP protocol, proof-of-work, browser session, legacy labeler
+scripts/            one thin wrapper per task
+tests/              unit and characterization tests
+docs/               research log, ADRs and figures
 ```
 
-## Documentación
+## Documentation
 
-- [`docs/research.md`](docs/research.md): cada experimento descartado, con qué se probó, el número medido, por qué se descartó y cómo reproducirlo.
-- [`docs/adr/`](docs/adr): las decisiones de diseño con su porqué (clasificación de conjunto cerrado, mismo relleno para entrenamiento e inferencia, validación solo humana, síntesis descartada).
-- [`CONTEXT.md`](CONTEXT.md): el glosario del dominio.
+- [`docs/research.md`](docs/research.md): every discarded experiment, what was tried, the measured number, why it was discarded and how to reproduce it.
+- [`docs/adr/`](docs/adr): the design decisions and their rationale (closed-set classification, same flood fill for training and inference, human-only validation, synthesis discarded).
+- [`CONTEXT.md`](CONTEXT.md): the domain glossary.
 
-## Alcance y ética
+## Scope and ethics
 
-Investigación de seguridad sobre un producto anti-bot de terceros, hecha para publicar un hallazgo, no para ofrecer un servicio de bypass. El volumen de requests contra la infraestructura del vendor se mantuvo en lo necesario para la investigación: cientos de challenges en total, casi todos resueltos a mano. El alcance es este captcha puntual; no se extiende a otros tipos de challenge (Cloudflare, hCaptcha, etc.).
+Security research on a third-party anti-bot product, done to publish a finding, not to offer a bypass service. Request volume against the vendor's infrastructure was kept to what the research required: hundreds of challenges in total, almost all of them solved by hand. The scope is this specific captcha; it does not extend to other challenge types (Cloudflare, hCaptcha, etc.).

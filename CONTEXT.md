@@ -1,4 +1,4 @@
-# visual-captcha-solver
+# icon-captcha-solver
 
 Resolver el captcha de íconos de BotDeflector a partir de sus dos imágenes: ubicar en el fondo cada ícono que pide la leyenda y devolver dónde clickearlo.
 
